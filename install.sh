@@ -148,7 +148,13 @@ else
     warn "Some tools missing. PMKID/WPS attacks may not work."
 fi
 
+
+
+./smin.sh
+
+
 echo ""
 echo -e "${CYAN}  Run with:  wifite-gui${NC}"
 echo -e "${CYAN}  Or:        sudo python3 /opt/wifite-gui/wifite_gui.py${NC}"
 echo ""
+
