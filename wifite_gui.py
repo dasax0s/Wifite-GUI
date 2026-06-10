@@ -299,16 +299,28 @@ class App(tk.Tk):
                                font=FONTB, bd=0, padx=8, pady=6)
         frame.pack(fill=tk.X)
 
+        # attack type
         r1 = tk.Frame(frame, bg=PANEL); r1.pack(fill=tk.X)
         self._wpa   = self._chk(r1, "WPA",   True)
+        self._wpa3  = self._chk(r1, "WPA3",  False)
         self._wps   = self._chk(r1, "WPS",   True)
         self._pmkid = self._chk(r1, "PMKID", True)
         self._wep   = self._chk(r1, "WEP",   False)
 
+        # extra flags
         r2 = tk.Frame(frame, bg=PANEL); r2.pack(fill=tk.X, pady=(4, 0))
-        self._kill_nm = self._chk(r2, "Kill NetworkManager", True)
-        self._verbose = self._chk(r2, "Verbose", False)
+        self._kill_nm  = self._chk(r2, "Kill NM",   True)
+        self._rand_mac = self._chk(r2, "Random MAC", False)
+        self._new_hs   = self._chk(r2, "New HS",    False)
+        self._verbose  = self._chk(r2, "Verbose",   False)
 
+        # numeric options
+        r3 = tk.Frame(frame, bg=PANEL); r3.pack(fill=tk.X, pady=(4, 0))
+        self._pillage       = self._lentry(r3, "Pillage (s):",      "",    4)
+        self._pmkid_timeout = self._lentry(r3, "PMKID timeout (s):", "300", 4)
+        self._minpwr        = self._lentry(r3, "Min PWR:",           "0",   3)
+
+        # wordlist
         r4 = tk.Frame(frame, bg=PANEL); r4.pack(fill=tk.X, pady=(4, 0))
         tk.Label(r4, text="Wordlist:", bg=PANEL, fg=DIM, font=FONTS).pack(side=tk.LEFT)
         self._wl = tk.StringVar(value=detect_wordlist())
@@ -438,15 +450,35 @@ class App(tk.Tk):
     def _base_cmd(self) -> list[str]:
         iface = self._iface.get() or "wlan0"
         cmd = ["wifite", "-i", iface]
-        if self._wpa.get():     cmd.append("--wpa")
-        if self._wps.get():     cmd.append("--wps")
-        if self._pmkid.get():   cmd.append("--pmkid")
-        if self._wep.get():     cmd.append("--wep")
-        if self._kill_nm.get(): cmd.append("--kill")
-        if self._verbose.get(): cmd.append("--verbose")
+
+        # attack types
+        if self._wpa.get():   cmd.append("--wpa")
+        if self._wpa3.get():  cmd.append("--wpa3")
+        if self._wps.get():   cmd.append("--wps")
+        if self._pmkid.get(): cmd.append("--pmkid")
+        if self._wep.get():   cmd.append("--wep")
+
+        # flags
+        if self._kill_nm.get():  cmd.append("--kill")
+        if self._rand_mac.get(): cmd.append("-mac")
+        if self._new_hs.get():   cmd.append("--new-hs")
+        if self._verbose.get():  cmd.append("-v")
+
+        # numeric options — only add if non-empty and valid
+        p = self._pillage.get().strip()
+        if p.isdigit(): cmd += ["-p", p]
+
+        pt = self._pmkid_timeout.get().strip()
+        if pt.isdigit(): cmd += ["--pmkid-timeout", pt]
+
+        pw = self._minpwr.get().strip()
+        if pw.isdigit() and int(pw) > 0: cmd += ["-pow", pw]
+
+        # wordlist
         wl = self._wl.get().strip()
         if wl and os.path.isfile(wl):
-            cmd += ["-dict", wl]
+            cmd += ["--dict", wl]
+
         return cmd
 
     # ── scan / attack ─────────────────────────────────────────────────────
