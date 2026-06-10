@@ -2,7 +2,7 @@
 # Wifite GUI — installer
 # Created by dasax0s
 
-set -e
+set -eo pipefail
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -45,22 +45,38 @@ info "Detected package manager: $PKG_MGR"
 # ── system update ────────────────────────────────────────────────────────
 info "Updating package lists..."
 if [[ $PKG_MGR == "apt-get" ]]; then
-    apt-get update -qq
+    apt-get update
 elif [[ $PKG_MGR == "dnf" ]]; then
-    dnf check-update -q || true
+    dnf check-update || true
 fi
 
 # ── system dependencies ──────────────────────────────────────────────────
-PKGS_APT=(python3 python3-tk aircrack-ng wifite hcxdumptool hcxtools hashcat iw wireless-tools net-tools)
+PKGS_APT=(python3 python3-tk python3-pil aircrack-ng wifite hcxdumptool hcxtools hashcat iw wireless-tools net-tools)
 PKGS_DNF=(python3 python3-tkinter aircrack-ng wifite hashcat iw wireless-tools net-tools)
 PKGS_PAC=(python python-tk aircrack-ng wifite hcxdumptool hcxtools hashcat iw wireless_tools net-tools)
 
-info "Installing system packages..."
+info "Installing system packages (this may take a few minutes)..."
 case $PKG_MGR in
-    apt-get) $INSTALL "${PKGS_APT[@]}" ;;
-    dnf)     $INSTALL "${PKGS_DNF[@]}" ;;
-    pacman)  $INSTALL "${PKGS_PAC[@]}" ;;
+    apt-get)
+        for pkg in "${PKGS_APT[@]}"; do
+            info "  Installing $pkg..."
+            apt-get install -y "$pkg" 2>/dev/null || warn "  Could not install $pkg — skipping"
+        done
+        ;;
+    dnf)
+        for pkg in "${PKGS_DNF[@]}"; do
+            info "  Installing $pkg..."
+            dnf install -y "$pkg" 2>/dev/null || warn "  Could not install $pkg — skipping"
+        done
+        ;;
+    pacman)
+        for pkg in "${PKGS_PAC[@]}"; do
+            info "  Installing $pkg..."
+            pacman -S --noconfirm "$pkg" 2>/dev/null || warn "  Could not install $pkg — skipping"
+        done
+        ;;
 esac
+success "Packages installed"
 
 # ── wifite2 from source (latest) ─────────────────────────────────────────
 if ! command -v wifite &>/dev/null; then
