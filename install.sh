@@ -43,13 +43,6 @@ fi
 info "Detected package manager: $PKG_MGR"
 
 # ── system update ────────────────────────────────────────────────────────
-info "Updating package lists..."
-if [[ $PKG_MGR == "apt-get" ]]; then
-    apt-get update
-elif [[ $PKG_MGR == "dnf" ]]; then
-    dnf check-update || true
-fi
-
 # ── system dependencies ──────────────────────────────────────────────────
 PKGS_APT=(python3 python3-tk python3-pil aircrack-ng wifite hcxdumptool hcxtools hashcat iw wireless-tools net-tools)
 PKGS_DNF=(python3 python3-tkinter aircrack-ng wifite hashcat iw wireless-tools net-tools)

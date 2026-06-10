@@ -32,6 +32,7 @@ A graphical front-end for the [wifite](https://github.com/derv82/wifite2) wirele
 ### Automatic (recommended)
 
 ```bash
+sudo apt update   # run this first before installing
 git clone https://github.com/dasax0s/wifite-gui
 cd wifite-gui
 chmod +x install.sh
