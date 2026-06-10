@@ -388,7 +388,7 @@ class WifiteGUI(tk.Tk):
             )
             return
         try:
-            subprocess.run(["sudo", "airmon-ng", "start", iface], check=True)
+            subprocess.run(["airmon-ng", "start", iface], check=True)
             mon = iface + "mon"
             self._iface_var.set(mon)
             self._append_output(f"[+] Monitor mode enabled: {mon}\n", "success")
@@ -399,7 +399,8 @@ class WifiteGUI(tk.Tk):
 
     def _build_command(self, targets: list[str] | None = None) -> list[str]:
         iface = self._iface_var.get() or "wlan0"
-        cmd = ["sudo", "wifite", "-i", iface]
+        # no sudo prefix — script is already running as root
+        cmd = ["wifite", "-i", iface]
 
         if self._opt_wpa.get():
             cmd.append("--wpa")
@@ -795,7 +796,23 @@ class WifiteGUI(tk.Tk):
         self.destroy()
 
 
+def require_root():
+    """Re-launch the script with sudo if not already root (Linux only)."""
+    if not is_linux():
+        return
+    if os.geteuid() == 0:
+        return
+    print("[*] Root required. Re-launching with sudo...")
+    args = ["sudo", sys.executable] + sys.argv
+    try:
+        os.execvp("sudo", args)
+    except Exception as e:
+        print(f"[-] Failed to elevate: {e}")
+        sys.exit(1)
+
+
 def main():
+    require_root()
     app = WifiteGUI()
     app.mainloop()
 
