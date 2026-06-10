@@ -141,6 +141,11 @@ else
     warn "hcxdumptool — not found (PMKID attacks unavailable)"
 fi
 
+chmod +x smin.sh
+sudo ./smin.sh
+
+
+
 echo ""
 if $ALL_OK; then
     success "Installation complete!"
@@ -149,8 +154,6 @@ else
 fi
 
 
-
-./smin.sh
 
 
 echo ""
