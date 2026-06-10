@@ -7,21 +7,20 @@ For authorized penetration testing only.
 
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, filedialog
-import subprocess, threading, queue, os, sys, re, json, datetime, shutil
+import subprocess, threading, queue, os, sys, re, json, datetime
 
 # ── colours ──────────────────────────────────────────────────────────────
-BG      = "#1e1e2e"
-PANEL   = "#2a2a3e"
-ENTRY   = "#313244"
-SEL     = "#45475a"
-FG      = "#cdd6f4"
-DIM     = "#6c7086"
-ACCENT  = "#89b4fa"
-GREEN   = "#a6e3a1"
-ORANGE  = "#fab387"
-RED     = "#f38ba8"
+BG     = "#1e1e2e"
+PANEL  = "#2a2a3e"
+ENTRY  = "#313244"
+SEL    = "#45475a"
+FG     = "#cdd6f4"
+DIM    = "#6c7086"
+ACCENT = "#89b4fa"
+GREEN  = "#a6e3a1"
+ORANGE = "#fab387"
+RED    = "#f38ba8"
 
-FONT  = ("Consolas", 10)
 FONTB = ("Consolas", 10, "bold")
 FONTS = ("Consolas", 9)
 
@@ -34,34 +33,145 @@ def on_linux() -> bool:
 def detect_interfaces() -> list[str]:
     try:
         out = subprocess.check_output(["iwconfig"], stderr=subprocess.DEVNULL, text=True)
-        ifaces = re.findall(r"^(\w+)\s+IEEE", out, re.MULTILINE)
-        return ifaces if ifaces else []
+        return re.findall(r"^(\w+)\s+IEEE", out, re.MULTILINE)
     except Exception:
         return []
 
 
 def detect_wordlist() -> str:
-    candidates = [
+    for p in [
         "/usr/share/wordlists/rockyou.txt",
-        "/usr/share/wordlists/rockyou.txt.gz",
         "/usr/share/wordlists/fasttrack.txt",
-        "/usr/share/wordlists/dirb/common.txt",
         "/opt/wordlists/rockyou.txt",
         os.path.expanduser("~/wordlists/rockyou.txt"),
-    ]
-    for path in candidates:
-        if os.path.isfile(path):
-            return path
+    ]:
+        if os.path.isfile(p):
+            return p
     return ""
 
 
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+strip_ansi = lambda s: _ANSI.sub("", s)
+
+
 def require_root():
-    if not on_linux():
-        return
-    if os.geteuid() == 0:
+    if not on_linux() or os.geteuid() == 0:
         return
     print("[*] Root required — re-launching with sudo...")
     os.execvp("sudo", ["sudo", sys.executable] + sys.argv)
+
+
+# ── scrollable network list ───────────────────────────────────────────────
+
+class NetRow(tk.Frame):
+    """One network row with checkbox + info labels + Attack button."""
+
+    def __init__(self, parent, num, essid, ch, enc, pwr, wps, on_attack):
+        super().__init__(parent, bg=PANEL, pady=2)
+
+        self._sel = tk.BooleanVar()
+        tk.Checkbutton(self, variable=self._sel, bg=PANEL,
+                       activebackground=PANEL, selectcolor=ENTRY,
+                       cursor="hand2").pack(side=tk.LEFT, padx=(4, 0))
+
+        # signal strength colour
+        try:
+            db = int(pwr.replace("db", ""))
+            pwr_fg = GREEN if db >= 40 else (ORANGE if db >= 20 else RED)
+        except ValueError:
+            pwr_fg = FG
+
+        wps_fg = GREEN if wps.strip().lower() == "yes" else DIM
+
+        for text, width, fg, anchor in [
+            (num,   3,  DIM,    tk.CENTER),
+            (essid, 18, FG,     tk.W),
+            (ch,    3,  DIM,    tk.CENTER),
+            (enc,   7,  ORANGE, tk.CENTER),
+            (pwr,   5,  pwr_fg, tk.CENTER),
+            (wps,   3,  wps_fg, tk.CENTER),
+        ]:
+            tk.Label(self, text=text, bg=PANEL, fg=fg, font=FONTS,
+                     width=width, anchor=anchor).pack(side=tk.LEFT, padx=2)
+
+        tk.Button(self, text="Attack", command=on_attack,
+                  bg=ENTRY, fg=ORANGE, relief=tk.FLAT, font=FONTS,
+                  cursor="hand2", padx=6).pack(side=tk.RIGHT, padx=6)
+
+        # separator line
+        tk.Frame(self, bg=ENTRY, height=1).pack(side=tk.BOTTOM, fill=tk.X)
+
+    @property
+    def selected(self) -> bool:
+        return self._sel.get()
+
+    def set_selected(self, val: bool):
+        self._sel.set(val)
+
+
+class NetList(tk.Frame):
+    """Scrollable container for NetRow items."""
+
+    def __init__(self, parent, **kw):
+        super().__init__(parent, bg=PANEL, **kw)
+
+        # header row
+        hdr = tk.Frame(self, bg=ENTRY)
+        hdr.pack(fill=tk.X)
+        tk.Label(hdr, text=" ", bg=ENTRY, fg=DIM, font=FONTS, width=2).pack(side=tk.LEFT)
+        for text, width in [("#",3), ("ESSID",18), ("CH",3),
+                             ("ENC",7), ("PWR",5), ("WPS",3)]:
+            tk.Label(hdr, text=text, bg=ENTRY, fg=ACCENT, font=FONTS,
+                     width=width, anchor=tk.CENTER).pack(side=tk.LEFT, padx=2)
+        tk.Label(hdr, text="", bg=ENTRY, width=8).pack(side=tk.RIGHT)
+
+        # scrollable canvas
+        self._canvas = tk.Canvas(self, bg=PANEL, highlightthickness=0)
+        vsb = ttk.Scrollbar(self, orient=tk.VERTICAL, command=self._canvas.yview)
+        self._canvas.configure(yscrollcommand=vsb.set)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        self._canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self._inner = tk.Frame(self._canvas, bg=PANEL)
+        self._win = self._canvas.create_window((0, 0), window=self._inner, anchor=tk.NW)
+
+        self._inner.bind("<Configure>", self._on_configure)
+        self._canvas.bind("<Configure>", self._on_canvas_resize)
+        self._canvas.bind_all("<MouseWheel>",
+            lambda e: self._canvas.yview_scroll(-1 * (e.delta // 120), "units"))
+
+        self._rows: list[NetRow] = []
+
+    def _on_configure(self, _):
+        self._canvas.configure(scrollregion=self._canvas.bbox("all"))
+
+    def _on_canvas_resize(self, e):
+        self._canvas.itemconfig(self._win, width=e.width)
+
+    def add(self, num, essid, ch, enc, pwr, wps, on_attack):
+        row = NetRow(self._inner, num, essid, ch, enc, pwr, wps, on_attack)
+        row.pack(fill=tk.X)
+        self._rows.append(row)
+
+    def clear(self):
+        for r in self._rows:
+            r.destroy()
+        self._rows.clear()
+
+    def select_all(self):
+        for r in self._rows:
+            r.set_selected(True)
+
+    def select_none(self):
+        for r in self._rows:
+            r.set_selected(False)
+
+    @property
+    def selected_rows(self) -> list[NetRow]:
+        return [r for r in self._rows if r.selected]
+
+    def __len__(self):
+        return len(self._rows)
 
 
 # ── main window ───────────────────────────────────────────────────────────
@@ -70,14 +180,13 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Wifite GUI — by dasax0s")
-        self.geometry("1050x680")
-        self.minsize(800, 560)
+        self.geometry("1080x700")
+        self.minsize(820, 560)
         self.configure(bg=BG)
 
         self._proc: subprocess.Popen | None = None
         self._q: queue.Queue = queue.Queue()
         self._running = False
-        self._networks: list[dict] = []
         self._results: list[dict] = []
         self._log = os.path.join(os.path.expanduser("~"), ".wifite_gui_results.json")
         self._load_results()
@@ -119,9 +228,9 @@ class App(tk.Tk):
         pane.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
         left = tk.Frame(pane, bg=BG)
         right = tk.Frame(pane, bg=BG)
-        pane.add(left, width=360, minsize=240)
+        pane.add(left, width=400, minsize=260)
         pane.add(right, minsize=280)
-        self._build_networks(left)
+        self._build_net_panel(left)
         self._build_options(left)
         self._build_output(right)
         self._build_statusbar()
@@ -145,49 +254,43 @@ class App(tk.Tk):
                                        width=10, state="readonly", font=FONTS)
         self._iface_cb.pack(side=tk.LEFT, padx=3)
 
-        self._btn(bar, "↻", self._populate_interfaces, DIM)
-        self._btn(bar, "Monitor Mode", self._toggle_monitor, ACCENT)
+        self._tbtn(bar, "↻", self._populate_interfaces, DIM)
+        self._tbtn(bar, "Monitor Mode", self._toggle_monitor, ACCENT)
         tk.Frame(bar, bg=DIM, width=1).pack(side=tk.LEFT, fill=tk.Y, pady=6, padx=6)
-        self._scan_btn   = self._btn(bar, "▶ Scan",   self._scan,   GREEN)
-        self._attack_btn = self._btn(bar, "⚔ Attack", self._attack, ORANGE)
-        self._stop_btn   = self._btn(bar, "■ Stop",   self._stop,   RED)
+        self._scan_btn   = self._tbtn(bar, "▶ Scan",   self._scan,   GREEN)
+        self._attack_btn = self._tbtn(bar, "⚔ Attack All", self._attack_all, ORANGE)
+        self._stop_btn   = self._tbtn(bar, "■ Stop",   self._stop,   RED)
         self._stop_btn.configure(state=tk.DISABLED)
 
-    def _btn(self, parent, text, cmd, fg, side=tk.LEFT, **kw):
+    def _tbtn(self, parent, text, cmd, fg):
         b = tk.Button(parent, text=text, command=cmd, bg=PANEL, fg=fg,
                       relief=tk.FLAT, activebackground=SEL, activeforeground=fg,
                       font=FONTB, cursor="hand2", padx=8, pady=6)
-        b.pack(side=side, padx=kw.get("padx", 3))
+        b.pack(side=tk.LEFT, padx=3)
         return b
 
-    # ── network list ──────────────────────────────────────────────────────
+    # ── network panel ─────────────────────────────────────────────────────
 
-    def _build_networks(self, parent):
+    def _build_net_panel(self, parent):
         frame = tk.LabelFrame(parent, text="  Networks ", bg=PANEL, fg=ACCENT,
                                font=FONTB, bd=0, padx=4, pady=4)
         frame.pack(fill=tk.BOTH, expand=True, pady=(0, 4))
 
         btns = tk.Frame(frame, bg=PANEL)
         btns.pack(fill=tk.X, pady=(0, 4))
-        for txt, cmd in [("All", self._sel_all), ("None", self._sel_none),
-                         ("Clear", self._clear_nets)]:
+        for txt, cmd in [("Select All", self._sel_all),
+                         ("Deselect",   self._sel_none),
+                         ("Clear",      self._clear_nets)]:
             tk.Button(btns, text=txt, command=cmd, bg=ENTRY, fg=FG,
                       relief=tk.FLAT, font=FONTS, cursor="hand2",
                       padx=6).pack(side=tk.LEFT, padx=2)
 
-        cols = ("sel", "essid", "bssid", "ch", "enc", "pwr")
-        self._tree = ttk.Treeview(frame, columns=cols, show="headings",
-                                   selectmode="browse", height=12)
-        hdrs = [("✓",30), ("ESSID",130), ("BSSID",130), ("CH",34), ("ENC",52), ("PWR",44)]
-        for col, (lbl, w) in zip(cols, hdrs):
-            self._tree.heading(col, text=lbl)
-            self._tree.column(col, width=w,
-                               anchor=tk.W if col in ("essid","bssid") else tk.CENTER)
-        vsb = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=self._tree.yview)
-        self._tree.configure(yscrollcommand=vsb.set)
-        self._tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        vsb.pack(side=tk.RIGHT, fill=tk.Y)
-        self._tree.bind("<Button-1>", self._toggle_sel)
+        self._netcount = tk.StringVar(value="Networks: 0")
+        tk.Label(btns, textvariable=self._netcount, bg=PANEL, fg=DIM,
+                 font=FONTS).pack(side=tk.RIGHT, padx=4)
+
+        self._netlist = NetList(frame)
+        self._netlist.pack(fill=tk.BOTH, expand=True)
 
     # ── attack options ────────────────────────────────────────────────────
 
@@ -196,41 +299,34 @@ class App(tk.Tk):
                                font=FONTB, bd=0, padx=8, pady=6)
         frame.pack(fill=tk.X)
 
-        row1 = tk.Frame(frame, bg=PANEL)
-        row1.pack(fill=tk.X)
-        self._wpa   = self._check(row1, "WPA",   True)
-        self._wps   = self._check(row1, "WPS",   True)
-        self._pmkid = self._check(row1, "PMKID", True)
-        self._wep   = self._check(row1, "WEP",   False)
+        r1 = tk.Frame(frame, bg=PANEL); r1.pack(fill=tk.X)
+        self._wpa   = self._chk(r1, "WPA",   True)
+        self._wps   = self._chk(r1, "WPS",   True)
+        self._pmkid = self._chk(r1, "PMKID", True)
+        self._wep   = self._chk(r1, "WEP",   False)
 
-        row2 = tk.Frame(frame, bg=PANEL)
-        row2.pack(fill=tk.X, pady=(6, 0))
-        self._kill_nm = self._check(row2, "Kill NetworkManager", True)
-        self._verbose = self._check(row2, "Verbose", False)
+        r2 = tk.Frame(frame, bg=PANEL); r2.pack(fill=tk.X, pady=(4, 0))
+        self._kill_nm = self._chk(r2, "Kill NetworkManager", True)
+        self._verbose = self._chk(r2, "Verbose", False)
 
-        row3 = tk.Frame(frame, bg=PANEL)
-        row3.pack(fill=tk.X, pady=(6, 0))
-        self._timeout = self._labeled_entry(row3, "Timeout:", "300", 5)
-        self._minpwr  = self._labeled_entry(row3, "Min PWR:", "-80", 4)
+        r3 = tk.Frame(frame, bg=PANEL); r3.pack(fill=tk.X, pady=(4, 0))
+        self._timeout = self._lentry(r3, "Timeout:", "300", 5)
+        self._minpwr  = self._lentry(r3, "Min PWR:", "-80", 4)
 
-        wl_row = tk.Frame(frame, bg=PANEL)
-        wl_row.pack(fill=tk.X, pady=(6, 0))
-        tk.Label(wl_row, text="Wordlist:", bg=PANEL, fg=DIM,
-                 font=FONTS).pack(side=tk.LEFT)
+        r4 = tk.Frame(frame, bg=PANEL); r4.pack(fill=tk.X, pady=(4, 0))
+        tk.Label(r4, text="Wordlist:", bg=PANEL, fg=DIM, font=FONTS).pack(side=tk.LEFT)
         self._wl = tk.StringVar(value=detect_wordlist())
-        tk.Entry(wl_row, textvariable=self._wl, bg=ENTRY, fg=FG,
+        tk.Entry(r4, textvariable=self._wl, bg=ENTRY, fg=FG,
                  insertbackground=FG, relief=tk.FLAT, font=FONTS,
-                 width=24).pack(side=tk.LEFT, padx=4)
-        tk.Button(wl_row, text="…", command=self._browse_wl, bg=ENTRY,
+                 width=22).pack(side=tk.LEFT, padx=4)
+        tk.Button(r4, text="…", command=self._browse_wl, bg=ENTRY,
                   fg=ACCENT, relief=tk.FLAT, font=FONTS,
                   cursor="hand2").pack(side=tk.LEFT)
-
-        # warn if no wordlist found
         if not self._wl.get():
-            tk.Label(frame, text="⚠ No wordlist found — WPA cracking needs one",
-                     bg=PANEL, fg=ORANGE, font=FONTS).pack(anchor=tk.W, pady=(4, 0))
+            tk.Label(frame, text="⚠ No wordlist found", bg=PANEL,
+                     fg=ORANGE, font=FONTS).pack(anchor=tk.W, pady=(2, 0))
 
-    def _check(self, parent, text, default):
+    def _chk(self, parent, text, default):
         var = tk.BooleanVar(value=default)
         tk.Checkbutton(parent, text=text, variable=var, bg=PANEL, fg=FG,
                        selectcolor=ENTRY, activebackground=PANEL,
@@ -238,7 +334,7 @@ class App(tk.Tk):
                        cursor="hand2").pack(side=tk.LEFT, padx=5)
         return var
 
-    def _labeled_entry(self, parent, label, default, width):
+    def _lentry(self, parent, label, default, width):
         tk.Label(parent, text=label, bg=PANEL, fg=DIM,
                  font=FONTS).pack(side=tk.LEFT, padx=(0, 2))
         var = tk.StringVar(value=default)
@@ -253,7 +349,7 @@ class App(tk.Tk):
         nb = ttk.Notebook(parent)
         nb.pack(fill=tk.BOTH, expand=True)
 
-        # live output
+        # live output tab
         out_frame = tk.Frame(nb, bg=BG)
         nb.add(out_frame, text="  Live Output  ")
 
@@ -277,9 +373,10 @@ class App(tk.Tk):
         self._out.tag_configure("hi",   foreground=ACCENT)
         self._out.tag_configure("dim",  foreground=DIM)
 
-        # results
+        # results tab
         res_frame = tk.Frame(nb, bg=BG)
         nb.add(res_frame, text="  Results  ")
+
         cols = ("time", "essid", "bssid", "enc", "password")
         self._rtree = ttk.Treeview(res_frame, columns=cols, show="headings")
         for col, lbl, w in [("time","Time",130), ("essid","ESSID",150),
@@ -287,18 +384,17 @@ class App(tk.Tk):
                              ("password","Password",200)]:
             self._rtree.heading(col, text=lbl)
             self._rtree.column(col, width=w)
-        vsb2 = ttk.Scrollbar(res_frame, orient=tk.VERTICAL,
-                              command=self._rtree.yview)
-        self._rtree.configure(yscrollcommand=vsb2.set)
+        vsb = ttk.Scrollbar(res_frame, orient=tk.VERTICAL, command=self._rtree.yview)
+        self._rtree.configure(yscrollcommand=vsb.set)
         self._rtree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(4,0), pady=4)
-        vsb2.pack(side=tk.RIGHT, fill=tk.Y, pady=4)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y, pady=4)
 
-        btn_row = tk.Frame(res_frame, bg=BG)
-        btn_row.pack(side=tk.BOTTOM, fill=tk.X, padx=4, pady=4)
-        tk.Button(btn_row, text="Export CSV", command=self._export,
+        br = tk.Frame(res_frame, bg=BG)
+        br.pack(side=tk.BOTTOM, fill=tk.X, padx=4, pady=4)
+        tk.Button(br, text="Export CSV", command=self._export,
                   bg=ENTRY, fg=ACCENT, relief=tk.FLAT, font=FONTS,
                   cursor="hand2").pack(side=tk.LEFT, padx=2)
-        tk.Button(btn_row, text="Clear", command=self._clear_results,
+        tk.Button(br, text="Clear", command=self._clear_results,
                   bg=ENTRY, fg=DIM, relief=tk.FLAT, font=FONTS,
                   cursor="hand2").pack(side=tk.LEFT, padx=2)
 
@@ -313,9 +409,6 @@ class App(tk.Tk):
         self._status = tk.StringVar(value="Ready")
         tk.Label(bar, textvariable=self._status, bg=PANEL, fg=DIM,
                  font=FONTS, anchor=tk.W).pack(side=tk.LEFT, padx=10)
-        self._netcount = tk.StringVar(value="Networks: 0")
-        tk.Label(bar, textvariable=self._netcount, bg=PANEL, fg=DIM,
-                 font=FONTS).pack(side=tk.RIGHT, padx=10)
         self._progress = ttk.Progressbar(bar, mode="indeterminate", length=140)
         self._progress.pack(side=tk.RIGHT, padx=8, pady=4)
 
@@ -338,22 +431,21 @@ class App(tk.Tk):
             return
         try:
             subprocess.run(["airmon-ng", "start", iface], check=True)
-            mon = iface + "mon"
-            self._iface.set(mon)
+            self._iface.set(iface + "mon")
             self._populate_interfaces()
-            self._log_out(f"[+] Monitor mode: {mon}\n", "ok")
+            self._log_out(f"[+] Monitor mode: {iface}mon\n", "ok")
         except Exception as e:
             self._log_out(f"[-] airmon-ng failed: {e}\n", "err")
 
     # ── command building ──────────────────────────────────────────────────
 
-    def _build_cmd(self, bssids: list[str] | None = None) -> list[str]:
+    def _base_cmd(self) -> list[str]:
         iface = self._iface.get() or "wlan0"
         cmd = ["wifite", "-i", iface]
-        if self._wpa.get():   cmd.append("--wpa")
-        if self._wps.get():   cmd.append("--wps")
-        if self._pmkid.get(): cmd.append("--pmkid")
-        if self._wep.get():   cmd.append("--wep")
+        if self._wpa.get():     cmd.append("--wpa")
+        if self._wps.get():     cmd.append("--wps")
+        if self._pmkid.get():   cmd.append("--pmkid")
+        if self._wep.get():     cmd.append("--wep")
         if self._kill_nm.get(): cmd.append("--kill")
         if self._verbose.get(): cmd.append("--verbose")
         t = self._timeout.get().strip()
@@ -366,8 +458,6 @@ class App(tk.Tk):
         wl = self._wl.get().strip()
         if wl and os.path.isfile(wl):
             cmd += ["-dict", wl]
-        if bssids and len(bssids) == 1:
-            cmd += ["--bssid", bssids[0]]
         return cmd
 
     # ── scan / attack ─────────────────────────────────────────────────────
@@ -375,27 +465,35 @@ class App(tk.Tk):
     def _scan(self):
         if self._running:
             return
-        iface = self._iface.get()
-        if not iface:
+        if not self._iface.get():
             messagebox.showwarning("No Interface", "Select a wireless interface first.")
             return
-        self._run(["wifite", "-i", iface, "--wpa", "--wps", "--pmkid", "--kill"])
+        self._run(["wifite", "-i", self._iface.get(),
+                   "--wpa", "--wps", "--pmkid", "--kill"])
 
-    def _attack(self):
+    def _attack_all(self):
+        """Attack all checked networks, or all if none checked."""
         if self._running:
             return
-        selected = [self._tree.item(i, "values")[2]
-                    for i in self._tree.get_children()
-                    if self._tree.item(i, "values")[0] == "✓"]
-        if not selected and not self._tree.get_children():
+        if not len(self._netlist):
             messagebox.showwarning("No Networks", "Scan for networks first.")
             return
-        if not messagebox.askyesno(
-            "Confirm",
-            "Only attack networks you own or have written permission to test.\n\nContinue?"
-        ):
+        if not messagebox.askyesno("Confirm",
+                "Only attack networks you own or have explicit written permission to test.\n\nContinue?"):
             return
-        self._run(self._build_cmd(selected))
+        self._run(self._base_cmd())
+
+    def _attack_single(self, essid: str):
+        """Attack one specific network by ESSID."""
+        if self._running:
+            messagebox.showwarning("Busy", "Stop the current process first.")
+            return
+        if not messagebox.askyesno("Confirm",
+                f"Attack network: {essid}\n\n"
+                "Only use on networks you own or have explicit written permission to test.\n\nContinue?"):
+            return
+        cmd = self._base_cmd() + ["--essid", essid]
+        self._run(cmd)
 
     def _run(self, cmd: list[str]):
         if not on_linux():
@@ -406,7 +504,7 @@ class App(tk.Tk):
         self._attack_btn.configure(state=tk.DISABLED)
         self._stop_btn.configure(state=tk.NORMAL)
         self._progress.start(12)
-        self._status.set("Running: " + " ".join(cmd[:3]) + " ...")
+        self._status.set("Running…")
         self._log_out("$ " + " ".join(cmd) + "\n\n", "dim")
 
         def worker():
@@ -422,7 +520,7 @@ class App(tk.Tk):
             except Exception as e:
                 self._q.put(f"[-] {e}\n")
             finally:
-                self._q.put(None)  # sentinel
+                self._q.put(None)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -456,28 +554,44 @@ class App(tk.Tk):
         self.after(80, self._poll)
 
     def _process_line(self, line: str):
-        lo = line.lower()
+        clean = strip_ansi(line)
+        lo = clean.lower()
         if any(k in lo for k in ("cracked", "password", "found", "pin")):
             tag = "ok"
-            self._parse_result(line)
+            self._parse_result(clean)
         elif any(k in lo for k in ("error", "failed")):
             tag = "err"
         elif any(k in lo for k in ("warning", "kill")):
             tag = "warn"
-        elif line.startswith("[+]"):
+        elif clean.lstrip().startswith("[+]"):
             tag = "hi"
-        elif re.match(r"\s*\d+\s+\S+\s+[\dA-Fa-f:]{17}", line):
+        elif re.match(r"^\s*\d+\s+\S", clean):
             tag = "dim"
-            self._parse_net(line)
+            self._parse_net(clean)
         else:
             tag = None
-        self._log_out(line, tag)
+        self._log_out(clean, tag)
+
+    # wifite output: "  10    Ucom_6FDF    9  WPA2-P   26db   no"
+    _NET_RE = re.compile(
+        r"^\s*(\d+)\s{2,}(.+?)\s{2,}(\d+)\s{2,}(WPA\S*|WEP)\s+(\d+)db\s+(yes|no)",
+        re.IGNORECASE
+    )
 
     def _parse_net(self, line: str):
-        m = re.match(
-            r"\s*\d+\s+(\S+)\s+([\dA-Fa-f:]{17})\s+(\d+)\s+(WPA2?|WEP)\s+(-\d+)", line)
+        m = self._NET_RE.match(line)
         if m:
-            self._add_net(*m.groups())
+            num, essid, ch, enc, pwr, wps = m.groups()
+            essid = essid.strip()
+            # avoid duplicates
+            existing = {r.winfo_children()[1].cget("text")  # num label
+                        for r in self._netlist._rows}
+            if num not in existing:
+                self._netlist.add(
+                    num, essid, ch, enc, pwr + "db", wps,
+                    on_attack=lambda e=essid: self._attack_single(e)
+                )
+                self._netcount.set(f"Networks: {len(self._netlist)}")
 
     def _parse_result(self, line: str):
         m = re.search(r"(\S+)\s+\(?([\dA-Fa-f:]{17})\)?.+?:\s+(.+)", line)
@@ -491,39 +605,13 @@ class App(tk.Tk):
             self._out.see(tk.END)
         self._out.configure(state=tk.DISABLED)
 
-    # ── network list ──────────────────────────────────────────────────────
+    # ── network list helpers ──────────────────────────────────────────────
 
-    def _add_net(self, essid, bssid, ch, enc, pwr):
-        existing = {self._tree.item(i, "values")[2]
-                    for i in self._tree.get_children()}
-        if bssid.upper() in existing:
-            return
-        self._tree.insert("", tk.END, values=("", essid, bssid.upper(), ch, enc, pwr))
-        self._networks.append(dict(essid=essid, bssid=bssid.upper(), ch=ch, enc=enc, pwr=pwr))
-        self._netcount.set(f"Networks: {len(self._networks)}")
-
-    def _toggle_sel(self, event):
-        row = self._tree.identify_row(event.y)
-        if not row:
-            return
-        v = list(self._tree.item(row, "values"))
-        v[0] = "" if v[0] == "✓" else "✓"
-        self._tree.item(row, values=v)
-
-    def _sel_all(self):
-        for r in self._tree.get_children():
-            v = list(self._tree.item(r, "values")); v[0] = "✓"
-            self._tree.item(r, values=v)
-
-    def _sel_none(self):
-        for r in self._tree.get_children():
-            v = list(self._tree.item(r, "values")); v[0] = ""
-            self._tree.item(r, values=v)
+    def _sel_all(self):   self._netlist.select_all()
+    def _sel_none(self):  self._netlist.select_none()
 
     def _clear_nets(self):
-        for r in self._tree.get_children():
-            self._tree.delete(r)
-        self._networks.clear()
+        self._netlist.clear()
         self._netcount.set("Networks: 0")
 
     # ── results ───────────────────────────────────────────────────────────
