@@ -299,13 +299,14 @@ class App(tk.Tk):
                                font=FONTB, bd=0, padx=8, pady=6)
         frame.pack(fill=tk.X)
 
-        # attack type
+        # attack type  (no flag = wifite uses all attacks by default)
         r1 = tk.Frame(frame, bg=PANEL); r1.pack(fill=tk.X)
-        self._wpa   = self._chk(r1, "WPA",   True)
-        self._wpa3  = self._chk(r1, "WPA3",  False)
-        self._wps   = self._chk(r1, "WPS",   True)
-        self._pmkid = self._chk(r1, "PMKID", True)
-        self._wep   = self._chk(r1, "WEP",   False)
+        self._wpa      = self._chk(r1, "WPA",         True)
+        self._wpa3     = self._chk(r1, "WPA3",        False)
+        self._wps      = self._chk(r1, "WPS",         True)
+        self._wep      = self._chk(r1, "WEP",         False)
+        self._pmkid_only = self._chk(r1, "PMKID only", False)
+        self._no_pmkid   = self._chk(r1, "No PMKID",   False)
 
         # extra flags
         r2 = tk.Frame(frame, bg=PANEL); r2.pack(fill=tk.X, pady=(4, 0))
@@ -451,12 +452,25 @@ class App(tk.Tk):
         iface = self._iface.get() or "wlan0"
         cmd = ["wifite", "-i", iface]
 
-        # attack types
-        if self._wpa.get():   cmd.append("--wpa")
-        if self._wpa3.get():  cmd.append("--wpa3")
-        if self._wps.get():   cmd.append("--wps")
-        if self._pmkid.get(): cmd.append("--pmkid")
-        if self._wep.get():   cmd.append("--wep")
+        # network type filters — only pass if a specific subset is selected.
+        # passing none = wifite shows all types (recommended default).
+        # passing multiple exclusive flags causes wifite to use the last one,
+        # so we only pass a flag when it's the ONLY one selected.
+        type_flags = {
+            "--wpa":  self._wpa.get(),
+            "--wpa3": self._wpa3.get(),
+            "--wps":  self._wps.get(),
+            "--wep":  self._wep.get(),
+        }
+        selected_types = [f for f, v in type_flags.items() if v]
+        if len(selected_types) == 1:
+            # only one type selected → pass the filter
+            cmd.append(selected_types[0])
+        # if 0 or all selected → no flag (wifite scans everything)
+
+        # PMKID mode — mutually exclusive
+        if self._pmkid_only.get():   cmd.append("--pmkid")
+        elif self._no_pmkid.get():   cmd.append("--no-pmkid")
 
         # flags
         if self._kill_nm.get():  cmd.append("--kill")
@@ -489,8 +503,7 @@ class App(tk.Tk):
         if not self._iface.get():
             messagebox.showwarning("No Interface", "Select a wireless interface first.")
             return
-        self._run(["wifite", "-i", self._iface.get(),
-                   "--wpa", "--wps", "--pmkid", "--kill"])
+        self._run(self._base_cmd())
 
     def _attack_all(self):
         """Attack all checked networks, or all if none checked."""
