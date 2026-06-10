@@ -309,10 +309,6 @@ class App(tk.Tk):
         self._kill_nm = self._chk(r2, "Kill NetworkManager", True)
         self._verbose = self._chk(r2, "Verbose", False)
 
-        r3 = tk.Frame(frame, bg=PANEL); r3.pack(fill=tk.X, pady=(4, 0))
-        self._timeout = self._lentry(r3, "Timeout:", "300", 5)
-        self._minpwr  = self._lentry(r3, "Min PWR:", "-80", 4)
-
         r4 = tk.Frame(frame, bg=PANEL); r4.pack(fill=tk.X, pady=(4, 0))
         tk.Label(r4, text="Wordlist:", bg=PANEL, fg=DIM, font=FONTS).pack(side=tk.LEFT)
         self._wl = tk.StringVar(value=detect_wordlist())
@@ -448,13 +444,6 @@ class App(tk.Tk):
         if self._wep.get():     cmd.append("--wep")
         if self._kill_nm.get(): cmd.append("--kill")
         if self._verbose.get(): cmd.append("--verbose")
-        t = self._timeout.get().strip()
-        if t.isdigit(): cmd += ["--timeout", t]
-        try:
-            int(self._minpwr.get())
-            cmd += ["--min-power", self._minpwr.get().strip()]
-        except ValueError:
-            pass
         wl = self._wl.get().strip()
         if wl and os.path.isfile(wl):
             cmd += ["-dict", wl]
